@@ -5,17 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Image Merger</title>
     
-    <!-- PWA Meta Tags -->
     <meta name="theme-color" content="#1f2937">
     <meta name="description" content="Merge multiple images vertically and copy to clipboard. Works offline.">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Image Merger">
 
-    <!-- PWA Manifest (Embedded) -->
     <link rel="manifest" href="manifest.json">
-
-    <!-- PWA Icons -->
     <link rel="icon" href="icon-192x192.png" type="image/png">
     <link rel="apple-touch-icon" href="icon-192x192.png">
 
@@ -122,17 +118,32 @@
             display: flex;
             align-items: center;
             gap: 15px;
+            cursor: move;
+            transition: all 0.2s;
+            user-select: none;
+        }
+        .image-item:hover {
+            background: #374151;
+        }
+        .image-item.dragging {
+            opacity: 0.5;
+        }
+        .image-item.drag-over {
+            border-top: 3px solid #2563eb;
         }
         .image-item img {
             width: 64px;
             height: 64px;
             object-fit: cover;
             border-radius: 4px;
+            pointer-events: none;
         }
         .image-item span {
             color: #d1d5db;
             font-size: 14px;
             word-break: break-all;
+            flex: 1;
+            pointer-events: none;
         }
         .info {
             color: #9ca3af;
@@ -141,6 +152,39 @@
             text-align: center;
         }
         .hidden { display: none; }
+        
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9);
+            align-items: center;
+            justify-content: center;
+        }
+        .modal.show {
+            display: flex;
+        }
+        .modal-content {
+            max-width: 90%;
+            max-height: 90%;
+            object-fit: contain;
+        }
+        .modal-close {
+            position: absolute;
+            top: 20px;
+            right: 40px;
+            color: white;
+            font-size: 40px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .modal-close:hover {
+            color: #ccc;
+        }
     </style>
 </head>
 <body>
@@ -166,11 +210,15 @@
             <div id="imagesList" class="images-list"></div>
         </div>
 
-        <div class="info">Workflow: Copy image → Paste → Repeat → Merge & Copy</div>
+        <div class="info">Drag images to reorder • Click to zoom • Paste → Repeat → Merge & Copy</div>
+    </div>
+
+    <div id="modal" class="modal" onclick="closeModal()">
+        <span class="modal-close">&times;</span>
+        <img class="modal-content" id="modalImg">
     </div>
 
     <script>
-        // --- PWA Service Worker Registration ---
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
                 navigator.serviceWorker.register('./sw.js')
@@ -184,6 +232,7 @@
         }
         
         let images = [];
+        let draggedIndex = null;
 
         function showStatus(msg) {
             const status = document.getElementById('status');
@@ -204,22 +253,92 @@
                 container.classList.remove('hidden');
                 count.textContent = images.length;
                 list.innerHTML = images.map((img, i) => `
-                    <div class="image-item">
+                    <div class="image-item" draggable="true" data-index="${i}">
                         <img src="${img.url}" alt="Preview ${i+1}">
                         <span>${i + 1}. ${img.width}×${img.height}px</span>
                     </div>
                 `).join('');
-                 // Scroll to the bottom of the list
                 list.scrollTop = list.scrollHeight;
+                attachDragListeners();
             } else {
                 container.classList.add('hidden');
                 status.textContent = 'Paste an image to get started.';
             }
         }
 
+        function attachDragListeners() {
+            const items = document.querySelectorAll('.image-item');
+            items.forEach(item => {
+                item.addEventListener('dragstart', handleDragStart);
+                item.addEventListener('dragend', handleDragEnd);
+                item.addEventListener('dragover', handleDragOver);
+                item.addEventListener('drop', handleDrop);
+                item.addEventListener('dragleave', handleDragLeave);
+                item.addEventListener('click', (e) => {
+                    const index = parseInt(e.currentTarget.dataset.index);
+                    openModal(images[index].url);
+                });
+            });
+        }
+
+        function handleDragStart(e) {
+            draggedIndex = parseInt(e.target.dataset.index);
+            e.target.classList.add('dragging');
+        }
+
+        function handleDragEnd(e) {
+            e.target.classList.remove('dragging');
+            document.querySelectorAll('.image-item').forEach(item => {
+                item.classList.remove('drag-over');
+            });
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            const target = e.target.closest('.image-item');
+            if (target && !target.classList.contains('dragging')) {
+                target.classList.add('drag-over');
+            }
+        }
+
+        function handleDragLeave(e) {
+            const target = e.target.closest('.image-item');
+            if (target) {
+                target.classList.remove('drag-over');
+            }
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            const target = e.target.closest('.image-item');
+            if (!target) return;
+
+            const dropIndex = parseInt(target.dataset.index);
+            
+            if (draggedIndex !== null && draggedIndex !== dropIndex) {
+                const draggedItem = images[draggedIndex];
+                images.splice(draggedIndex, 1);
+                images.splice(dropIndex, 0, draggedItem);
+                showStatus('Reordered images');
+                updateUI();
+            }
+            
+            draggedIndex = null;
+        }
+
+        function openModal(url) {
+            const modal = document.getElementById('modal');
+            const modalImg = document.getElementById('modalImg');
+            modalImg.src = url;
+            modal.classList.add('show');
+        }
+
+        function closeModal() {
+            document.getElementById('modal').classList.remove('show');
+        }
+
         async function pasteFromClipboard() {
             try {
-                // First, try the modern Clipboard API with permission query
                 const permission = await navigator.permissions.query({ name: 'clipboard-read' });
                 if (permission.state === 'denied') {
                     throw new Error('Clipboard permission denied.');
@@ -248,7 +367,7 @@
                         }
                         img.src = url;
                         imageFound = true;
-                        break; // Process only the first image found
+                        break;
                     }
                 }
                 if (!imageFound) {
@@ -277,16 +396,12 @@
             canvas.width = maxWidth;
             canvas.height = totalHeight;
             const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#111827'; // Set a background color in case images have transparency
-            ctx.fillRect(0, 0, maxWidth, totalHeight);
 
             let yOffset = 0;
             for (const imgData of images) {
                 const img = new Image();
-                // This promise ensures images are drawn sequentially
                 await new Promise((resolve, reject) => {
                     img.onload = () => {
-                        // Draw image centered if it's narrower than the max width
                         const xOffset = (maxWidth - img.width) / 2;
                         ctx.drawImage(img, xOffset, yOffset);
                         yOffset += img.height;
@@ -319,6 +434,12 @@
             updateUI();
             showStatus('Cleared all images.');
         }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeModal();
+            }
+        });
     </script>
 </body>
 </html>
