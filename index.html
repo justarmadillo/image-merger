@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Merger</title>
+    
+    <!-- PWA Meta Tags -->
+    <meta name="theme-color" content="#1f2937">
+    <meta name="description" content="Merge multiple images vertically and copy to clipboard. Works offline.">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Image Merger">
+
+    <!-- PWA Manifest (Embedded) -->
+    <link rel="manifest" href="manifest.json">
+
+    <!-- PWA Icons -->
+    <link rel="icon" href="icon-192x192.png" type="image/png">
+    <link rel="apple-touch-icon" href="icon-192x192.png">
+
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #111827;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: #1f2937;
+            border-radius: 12px;
+            padding: 40px;
+            max-width: 700px;
+            width: 100%;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+        }
+        h1 { color: white; margin-bottom: 30px; font-size: 32px; }
+        .buttons {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        button {
+            flex: 1;
+            padding: 18px 24px;
+            font-size: 16px;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: white;
+        }
+        .paste-btn {
+            background: #2563eb;
+        }
+        .paste-btn:hover {
+            background: #1d4ed8;
+        }
+        .merge-btn {
+            background: #16a34a;
+        }
+        .merge-btn:hover:not(:disabled) {
+            background: #15803d;
+        }
+        button:disabled {
+            background: #4b5563;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        .status {
+            background: #374151;
+            color: #e5e7eb;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .images-container {
+            background: #374151;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .images-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .images-header h2 {
+            color: white;
+            font-size: 18px;
+        }
+        .clear-btn {
+            background: none;
+            border: none;
+            color: #ef4444;
+            cursor: pointer;
+            font-size: 14px;
+            padding: 5px 10px;
+        }
+        .clear-btn:hover {
+            color: #dc2626;
+        }
+        .images-list {
+            max-height: 300px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .image-item {
+            background: #1f2937;
+            padding: 12px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .image-item img {
+            width: 64px;
+            height: 64px;
+            object-fit: cover;
+            border-radius: 4px;
+        }
+        .image-item span {
+            color: #d1d5db;
+            font-size: 14px;
+            word-break: break-all;
+        }
+        .info {
+            color: #9ca3af;
+            font-size: 12px;
+            margin-top: 25px;
+            text-align: center;
+        }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Image Merger</h1>
+        
+        <div class="buttons">
+            <button class="paste-btn" onclick="pasteFromClipboard()">
+                + Paste from Clipboard
+            </button>
+            <button class="merge-btn" id="mergeBtn" onclick="mergeAndCopy()" disabled>
+                ↑ Merge & Copy
+            </button>
+        </div>
+
+        <div id="status" class="status">Paste an image to get started.</div>
+
+        <div id="imagesContainer" class="images-container hidden">
+            <div class="images-header">
+                <h2>Images: <span id="imageCount">0</span></h2>
+                <button class="clear-btn" onclick="clearAll()">Clear All</button>
+            </div>
+            <div id="imagesList" class="images-list"></div>
+        </div>
+
+        <div class="info">Workflow: Copy image → Paste → Repeat → Merge & Copy</div>
+    </div>
+
+    <script>
+        // --- PWA Service Worker Registration ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(registration => {
+                        console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                    })
+                    .catch(error => {
+                        console.log('ServiceWorker registration failed: ', error);
+                    });
+            });
+        }
+        
+        let images = [];
+
+        function showStatus(msg) {
+            const status = document.getElementById('status');
+            status.textContent = msg;
+            status.classList.remove('hidden');
+        }
+
+        function updateUI() {
+            const mergeBtn = document.getElementById('mergeBtn');
+            const container = document.getElementById('imagesContainer');
+            const count = document.getElementById('imageCount');
+            const list = document.getElementById('imagesList');
+            const status = document.getElementById('status');
+
+            mergeBtn.disabled = images.length === 0;
+            
+            if (images.length > 0) {
+                container.classList.remove('hidden');
+                count.textContent = images.length;
+                list.innerHTML = images.map((img, i) => `
+                    <div class="image-item">
+                        <img src="${img.url}" alt="Preview ${i+1}">
+                        <span>${i + 1}. ${img.width}×${img.height}px</span>
+                    </div>
+                `).join('');
+                 // Scroll to the bottom of the list
+                list.scrollTop = list.scrollHeight;
+            } else {
+                container.classList.add('hidden');
+                status.textContent = 'Paste an image to get started.';
+            }
+        }
+
+        async function pasteFromClipboard() {
+            try {
+                // First, try the modern Clipboard API with permission query
+                const permission = await navigator.permissions.query({ name: 'clipboard-read' });
+                if (permission.state === 'denied') {
+                    throw new Error('Clipboard permission denied.');
+                }
+
+                const items = await navigator.clipboard.read();
+                let imageFound = false;
+                for (const item of items) {
+                    const imageType = item.types.find(type => type.startsWith('image/'));
+                    if (imageType) {
+                        const blob = await item.getType(imageType);
+                        const url = URL.createObjectURL(blob);
+                        const img = new Image();
+                        img.onload = () => {
+                            images.push({
+                                url: url,
+                                width: img.width,
+                                height: img.height,
+                                blob: blob
+                            });
+                            showStatus(`Added image ${images.length} (${img.width}×${img.height})`);
+                            updateUI();
+                        };
+                        img.onerror = () => {
+                           showStatus('Error loading pasted image data.');
+                        }
+                        img.src = url;
+                        imageFound = true;
+                        break; // Process only the first image found
+                    }
+                }
+                if (!imageFound) {
+                    showStatus('No image found in clipboard.');
+                }
+            } catch (err) {
+                console.error('Paste error:', err);
+                showStatus('Failed to paste. Please grant clipboard permission when prompted.');
+            }
+        }
+
+        async function mergeAndCopy() {
+            if (images.length === 0) {
+                showStatus('No images to merge.');
+                return;
+            }
+            
+            showStatus('Merging images...');
+            const mergeBtn = document.getElementById('mergeBtn');
+            mergeBtn.disabled = true;
+
+            const maxWidth = Math.max(...images.map(img => img.width));
+            const totalHeight = images.reduce((sum, img) => sum + img.height, 0);
+
+            const canvas = document.createElement('canvas');
+            canvas.width = maxWidth;
+            canvas.height = totalHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#111827'; // Set a background color in case images have transparency
+            ctx.fillRect(0, 0, maxWidth, totalHeight);
+
+            let yOffset = 0;
+            for (const imgData of images) {
+                const img = new Image();
+                // This promise ensures images are drawn sequentially
+                await new Promise((resolve, reject) => {
+                    img.onload = () => {
+                        // Draw image centered if it's narrower than the max width
+                        const xOffset = (maxWidth - img.width) / 2;
+                        ctx.drawImage(img, xOffset, yOffset);
+                        yOffset += img.height;
+                        resolve();
+                    };
+                    img.onerror = reject;
+                    img.src = imgData.url;
+                });
+            }
+
+            canvas.toBlob(async (blob) => {
+                try {
+                    await navigator.clipboard.write([
+                        new ClipboardItem({ 'image/png': blob })
+                    ]);
+                    showStatus(`Merged ${images.length} images (${maxWidth}×${totalHeight}) and copied to clipboard!`);
+                    clearAll();
+                } catch (err) {
+                    console.error('Copy error:', err);
+                    showStatus('Failed to copy merged image to clipboard.');
+                } finally {
+                    mergeBtn.disabled = false;
+                }
+            }, 'image/png');
+        }
+
+        function clearAll() {
+            images.forEach(img => URL.revokeObjectURL(img.url));
+            images = [];
+            updateUI();
+            showStatus('Cleared all images.');
+        }
+    </script>
+</body>
+</html>
